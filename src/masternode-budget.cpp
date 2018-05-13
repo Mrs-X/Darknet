@@ -1163,7 +1163,8 @@ void CBudgetManager::ProcessMessage(CNode* pfrom, std::string& strCommand, CData
             masternodeSync.AddedBudgetItem(vote.GetHash());
         }
 
-        LogPrint("mnbudget","mvote - new budget vote for budget %s - %s\n", vote.nProposalHash.ToString(),  vote.GetHash().ToString());
+        LogPrint("mnbudget","mvote - new budget vote for budget %s - %s - %s\n", 
+                 vote.nProposalHash.ToString(),  vote.GetHash().ToString(), vote.GetVoteString().c_str());
     }
 
     if (strCommand == "fbs") { //Finalized Budget Suggestion
@@ -1483,10 +1484,16 @@ CBudgetProposal::CBudgetProposal(const CBudgetProposal& other)
 
 bool CBudgetProposal::IsValid(std::string& strError, bool fCheckCollateral)
 {
+    /* This is/was a bug not discovered because the original code didn't
+     * actually remove ANY proposals, no matter what this check returned.
+     * As long as they are otherwise valid they need to stay, even when downvoted,
+     * so we just skip this code
+
     if (GetNays() - GetYeas() > mnodeman.CountEnabled(ActiveProtocol()) / 10) {
         strError = "Proposal " + strProposalName + ": Active removal";
         return false;
     }
+    */
 
     if (nBlockStart < 0) {
         strError = "Invalid Proposal";
@@ -1534,7 +1541,7 @@ bool CBudgetProposal::IsValid(std::string& strError, bool fCheckCollateral)
     //     }
     // }
 
-    //can only pay out 10% of the possible coins (min value of coins)
+    //  Pay maximum about 10% of the possible monthly coin supply
     if (nAmount > budget.GetTotalBudget(nBlockStart)) {
         strError = "Proposal " + strProposalName + ": Payment more than max";
         return false;
@@ -1586,7 +1593,8 @@ bool CBudgetProposal::AddOrUpdateVote(CBudgetVote& vote, std::string& strError)
     }
 
     mapVotes[hash] = vote;
-    LogPrint("mnbudget", "CBudgetProposal::AddOrUpdateVote - %s %s\n", strAction.c_str(), vote.GetHash().ToString().c_str());
+    LogPrint("mnbudget", "CBudgetProposal::AddOrUpdateVote - %s - %s - %s\n", 
+              strAction.c_str(), vote.GetHash().ToString().c_str(), vote.GetVoteString().c_str());
 
     return true;
 }
