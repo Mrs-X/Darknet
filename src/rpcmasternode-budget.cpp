@@ -711,7 +711,7 @@ UniValue getbudgetprojection(const UniValue& params, bool fHelp)
     UniValue resultObj(UniValue::VOBJ);
     CAmount nTotalAllotted = 0;
 
-    std::vector<CBudgetProposal*> winningProps = budget.GetBudget();
+    std::vector<CBudgetProposal*> winningProps = budget.GetBudget(true);
     BOOST_FOREACH (CBudgetProposal* pbudgetProposal, winningProps) {
         nTotalAllotted += pbudgetProposal->GetAllotted();
 
