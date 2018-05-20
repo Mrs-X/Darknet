@@ -231,7 +231,13 @@ public:
     std::pair<std::string, std::string> GetVotes(std::string strProposalName);
 
     CAmount GetTotalBudget(int nHeight);
-    std::vector<CBudgetProposal*> GetBudget();
+    int GetFinalizationWindow();
+    bool IsInRetentionWindow();
+
+    // XX42 ToDo bool IsInProposalWindow(); Implemtent this
+    // XX42 ToDo bool IsInVotingWindow();   Implemtent this
+
+    std::vector<CBudgetProposal*> GetBudget(bool fFinalization);
     std::vector<CBudgetProposal*> GetAllProposals();
     std::vector<CFinalizedBudget*> GetFinalizedBudgets();
     bool IsBudgetPaymentBlock(int nBlockHeight);
