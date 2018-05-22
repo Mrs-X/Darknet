@@ -143,6 +143,53 @@ void CBudgetManager::CheckOrphanVotes()
     LogPrint("mnbudget","CBudgetManager::CheckOrphanVotes - Done\n");
 }
 
+bool CBudgetManager::IsInRetentionWindow()
+{
+    int nCurrentHeight;
+    {
+        TRY_LOCK(cs_main, locked);
+        if (!locked) return true; // Keep proposal if we're not synced
+        if (!chainActive.Tip()) return true; // Keep proposal if we're not synced
+        nCurrentHeight = chainActive.Height();
+    }
+
+    int nBlockStart = nCurrentHeight - nCurrentHeight % GetBudgetPaymentCycleBlocks() + GetBudgetPaymentCycleBlocks();
+    int finalizationWindow = GetFinalizationWindow();
+    int nFinalizationStart = nBlockStart - finalizationWindow;
+    int nOffsetToStart = nFinalizationStart - nCurrentHeight;
+
+    // Start removing downvoted proposals 2 days before finalization starts
+    int nMaxRetention = 0;
+    if (Params().NetworkID() == CBaseChainParams::MAIN) {
+        nMaxRetention = 2880; // 2 days
+    }
+    else {
+        nMaxRetention = 4;    // 4 blocks for testnet
+    }
+
+    LogPrint("mnbudget","CBudgetManager::IsInRetentionWindow - nOffsetToStart(=%ld) > nMaxRetention(=%ld)\n", nOffsetToStart, nMaxRetention);
+    if (nOffsetToStart > nMaxRetention) {
+        return true; // Keep downvoted proposal
+    }
+
+    return false; // Remove downvoted proposal
+}
+
+int CBudgetManager::GetFinalizationWindow()
+{
+     // Submit final budget during the last 2 days (2880 blocks) before payment for Mainnet, about 9 minutes (9 blocks) for Testnet
+    int finalizationWindow = ((GetBudgetPaymentCycleBlocks() / 30) * 2);
+
+    if (Params().NetworkID() == CBaseChainParams::TESTNET) {
+        // NOTE: 9 blocks for testnet is way to short to have any masternode submit an automatic vote on the finalized(!) budget,
+        //       because those votes are only submitted/relayed once every 56 blocks in CFinalizedBudget::AutoCheck()
+
+        finalizationWindow = 64; // 56 + 4 finalization confirmations + 4 minutes buffer for propagation
+    }
+    
+    return finalizationWindow;
+}
+
 void CBudgetManager::SubmitFinalBudget()
 {
     static int nSubmittedHeight = 0; // height at which final budget was submitted last time
@@ -161,18 +208,8 @@ void CBudgetManager::SubmitFinalBudget()
         return;
     }
 
-     // Submit final budget during the last 2 days (2880 blocks) before payment for Mainnet, about 9 minutes (9 blocks) for Testnet
-    int finalizationWindow = ((GetBudgetPaymentCycleBlocks() / 30) * 2);
-
-    if (Params().NetworkID() == CBaseChainParams::TESTNET) {
-        // NOTE: 9 blocks for testnet is way to short to have any masternode submit an automatic vote on the finalized(!) budget,
-        //       because those votes are only submitted/relayed once every 56 blocks in CFinalizedBudget::AutoCheck()
-
-        finalizationWindow = 64; // 56 + 4 finalization confirmations + 4 minutes buffer for propagation
-    }
-
+    int finalizationWindow = GetFinalizationWindow();
     int nFinalizationStart = nBlockStart - finalizationWindow;
- 
     int nOffsetToStart = nFinalizationStart - nCurrentHeight;
 
     if (nBlockStart - nCurrentHeight > finalizationWindow) {
@@ -182,7 +219,7 @@ void CBudgetManager::SubmitFinalBudget()
         return;
     }
 
-    std::vector<CBudgetProposal*> vBudgetProposals = budget.GetBudget();
+    std::vector<CBudgetProposal*> vBudgetProposals = budget.GetBudget(true);
     std::string strBudgetName = "main";
     std::vector<CTxBudgetPayment> vecTxBudgetPayments;
 
@@ -489,6 +526,7 @@ void CBudgetManager::CheckAndRemove()
         pfinalizedBudget->fValid = pfinalizedBudget->IsValid(strError);
         if (!strError.empty ()) {
             LogPrint("mnbudget","CBudgetManager::CheckAndRemove - Invalid finalized budget: %s\n", strError);
+            strError = "";
         }
         else {
             LogPrint("mnbudget","CBudgetManager::CheckAndRemove - Found valid finalized budget: %s %s\n",
@@ -502,6 +540,8 @@ void CBudgetManager::CheckAndRemove()
 
         ++it;
     }
+
+    strError = ""; // Not yet really needed, but better to understand
 
     LogPrint("mnbudget", "CBudgetManager::CheckAndRemove - mapProposals cleanup - size before: %d\n", mapProposals.size());
     std::map<uint256, CBudgetProposal>::iterator it2 = mapProposals.begin();
@@ -775,7 +815,7 @@ struct sortProposalsByVotes {
 };
 
 //Need to review this function
-std::vector<CBudgetProposal*> CBudgetManager::GetBudget()
+std::vector<CBudgetProposal*> CBudgetManager::GetBudget(bool fFinalization)
 {
     LOCK(cs);
 
@@ -810,22 +850,44 @@ std::vector<CBudgetProposal*> CBudgetManager::GetBudget()
         CBudgetProposal* pbudgetProposal = (*it2).first;
 
         LogPrint("mnbudget","CBudgetManager::GetBudget() - Processing Budget %s\n", pbudgetProposal->strProposalName.c_str());
-        //prop start/end should be inside this period
-        if (pbudgetProposal->fValid && pbudgetProposal->nBlockStart <= nBlockStart &&
-            pbudgetProposal->nBlockEnd >= nBlockEnd &&
-            pbudgetProposal->GetYeas() - pbudgetProposal->GetNays() > mnodeman.CountEnabled(ActiveProtocol()) / 10 &&
-            pbudgetProposal->IsEstablished()) {
 
-            LogPrint("mnbudget","CBudgetManager::GetBudget() -   Check 1 passed: valid=%d | %ld <= %ld | %ld >= %ld | Yeas=%d Nays=%d Count=%d | established=%d\n",
+        bool fKeepProposal = false; // Default: remove proposal from proposal list
+
+        // Check whether proposal belongs to current budget cycle
+        bool fCorrectCycle = pbudgetProposal->fValid && pbudgetProposal->nBlockStart <= nBlockStart &&
+                             pbudgetProposal->nBlockEnd >= nBlockEnd;
+
+        // Check whether YES-vote - NO-votes is bigger than 10% of masternode-count
+        bool fEnoughVotes = (pbudgetProposal->GetYeas() - pbudgetProposal->GetNays()) > (mnodeman.CountEnabled(ActiveProtocol()) / 10);
+
+        // Keep winning proposals of current budget cycle (=old default behavior)
+        if (fCorrectCycle && fEnoughVotes && pbudgetProposal->IsEstablished()) {
+            fKeepProposal = true;
+
+            LogPrint("mnbudget","CBudgetManager::GetBudget() - Winning proposal: Check 1 passed: valid=%d | %ld <= %ld | %ld >= %ld | Yeas=%d Nays=%d Count=%d | established=%d\n",
                       pbudgetProposal->fValid, pbudgetProposal->nBlockStart, nBlockStart, pbudgetProposal->nBlockEnd,
                       nBlockEnd, pbudgetProposal->GetYeas(), pbudgetProposal->GetNays(), mnodeman.CountEnabled(ActiveProtocol()) / 10,
                       pbudgetProposal->IsEstablished());
+        }
 
+        // Keep downvoted and/or not-yet-established proposals (so they are still visible for voting) until 2 days before finalization
+        // Don't do this if this method is actually called for finalization
+        if (fCorrectCycle && IsInRetentionWindow() && !fFinalization) {
+            fKeepProposal = true;
+
+            LogPrint("mnbudget","CBudgetManager::GetBudget() - Retention proposal: Check 1 passed: valid=%d | %ld <= %ld | %ld >= %ld | Yeas=%d Nays=%d Count=%d (not needed) | established=%d (not needed)\n",
+                      pbudgetProposal->fValid, pbudgetProposal->nBlockStart, nBlockStart, pbudgetProposal->nBlockEnd,
+                      nBlockEnd, pbudgetProposal->GetYeas(), pbudgetProposal->GetNays(), mnodeman.CountEnabled(ActiveProtocol()) / 10,
+                      pbudgetProposal->IsEstablished());
+        }
+
+        // Check whether we're within the total-budget limits
+        if (fKeepProposal) {
             if (pbudgetProposal->GetAmount() + nBudgetAllocated <= nTotalBudget) {
                 pbudgetProposal->SetAllotted(pbudgetProposal->GetAmount());
                 nBudgetAllocated += pbudgetProposal->GetAmount();
                 vBudgetProposalsRet.push_back(pbudgetProposal);
-                LogPrint("mnbudget","CBudgetManager::GetBudget() -     Check 2 passed: Budget added\n");
+                LogPrint("mnbudget","CBudgetManager::GetBudget() -                     Check 2 passed: Budget added\n");
             } else {
                 pbudgetProposal->SetAllotted(0);
                 LogPrint("mnbudget","CBudgetManager::GetBudget() -     Check 2 failed: no amount allotted\n");
@@ -1163,7 +1225,8 @@ void CBudgetManager::ProcessMessage(CNode* pfrom, std::string& strCommand, CData
             masternodeSync.AddedBudgetItem(vote.GetHash());
         }
 
-        LogPrint("mnbudget","mvote - new budget vote for budget %s - %s\n", vote.nProposalHash.ToString(),  vote.GetHash().ToString());
+        LogPrint("mnbudget","mvote - new budget vote for budget %s - %s - %s\n", 
+                 vote.nProposalHash.ToString(),  vote.GetHash().ToString(), vote.GetVoteString().c_str());
     }
 
     if (strCommand == "fbs") { //Finalized Budget Suggestion
@@ -1483,31 +1546,62 @@ CBudgetProposal::CBudgetProposal(const CBudgetProposal& other)
 
 bool CBudgetProposal::IsValid(std::string& strError, bool fCheckCollateral)
 {
-    if (GetNays() - GetYeas() > mnodeman.CountEnabled(ActiveProtocol()) / 10) {
-        strError = "Proposal " + strProposalName + ": Active removal";
-        return false;
-    }
 
+    // Check starting block
     if (nBlockStart < 0) {
         strError = "Invalid Proposal";
         return false;
     }
 
+    // Check block-range
     if (nBlockEnd < nBlockStart) {
         strError = "Proposal " + strProposalName + ": Invalid nBlockEnd (end before start)";
         return false;
     }
 
+    // Start removing downvoted proposals in their second payment cycle to get rid of unpopular or downvoted
+    // troll proposals, but even those proposals should still have the chance to be visible and voted on for one cycle
+    int nEndOfFirstCycle = nBlockStart + GetBudgetPaymentCycleBlocks() + 1;
+
+    // Get current blockheight
+    int nHeight = 0;
+    {
+        TRY_LOCK(cs_main, locked);
+        if ((locked) && (chainActive.Tip() != NULL)) {
+            CBlockIndex* pindexPrev = chainActive.Tip();
+            if (pindexPrev) {
+                nHeight = pindexPrev->nHeight;
+            }
+        }
+    }
+
+    if (nHeight > nEndOfFirstCycle) {
+        // If NO-votes minus YES-votes is more than 10% of all masternodes => removed proposal
+        int nMN_10_Percent = mnodeman.CountEnabled(ActiveProtocol()) / 10;
+        int nYesVotes = GetYeas();
+        int nNoVotes = GetNays();
+
+        if (nNoVotes - nYesVotes > nMN_10_Percent) {
+            strError = "Proposal " + strProposalName + ": Downvoted by Yes=" + std::to_string(nYesVotes) + 
+                       ", No=" + std::to_string(nNoVotes) + ", 10% of MN-count=" + std::to_string(nMN_10_Percent) + 
+                       " at block " + std::to_string(nHeight);
+            return false;
+        }
+    }
+
+    // Check amount
     if (nAmount < 10 * COIN) {
         strError = "Proposal " + strProposalName + ": Invalid nAmount";
         return false;
     }
 
+    // Check payment address
     if (address == CScript()) {
         strError = "Proposal " + strProposalName + ": Invalid Payment Address";
         return false;
     }
 
+    // Check budget collateral
     if (fCheckCollateral) {
         int nConf = 0;
         if (!IsBudgetCollateralValid(nFeeTXHash, GetHash(), strError, nTime, nConf)) {
@@ -1516,42 +1610,25 @@ bool CBudgetProposal::IsValid(std::string& strError, bool fCheckCollateral)
         }
     }
 
-    /*
-        TODO: There might be an issue with multisig in the coinbase on mainnet, we will add support for it in a future release.
-    */
+    // Check whether it's multisig
+    // TODO: There might be an issue with multisig in the coinbase on mainnet, we will add support for it in a future release.
     if (address.IsPayToScriptHash()) {
         strError = "Proposal " + strProposalName + ": Multisig is not currently supported.";
         return false;
     }
 
-    //if proposal doesn't gain traction within 2 weeks, remove it
-    // nTime not being saved correctly
-    // -- TODO: We should keep track of the last time the proposal was valid, if it's invalid for 2 weeks, erase it
-    // if(nTime + (60*60*24*2) < GetAdjustedTime()) {
-    //     if(GetYeas()-GetNays() < (mnodeman.CountEnabled(ActiveProtocol())/10)) {
-    //         strError = "Not enough support";
-    //         return false;
-    //     }
-    // }
-
-    //can only pay out 10% of the possible coins (min value of coins)
+    //  Pay maximum about 10% of the possible monthly coin supply
     if (nAmount > budget.GetTotalBudget(nBlockStart)) {
         strError = "Proposal " + strProposalName + ": Payment more than max";
         return false;
     }
 
-    CBlockIndex* pindexPrev = chainActive.Tip();
-    if (pindexPrev == NULL) {
-        strError = "Proposal " + strProposalName + ": Tip is NULL";
-        return true;
-    }
-
     // Calculate maximum block this proposal will be valid, which is start of proposal + (number of payments * cycle)
     int nProposalEnd = GetBlockStart() + (GetBudgetPaymentCycleBlocks() * GetTotalPaymentCount());
 
-    // if (GetBlockEnd() < pindexPrev->nHeight - GetBudgetPaymentCycleBlocks() / 2) {
-    if(nProposalEnd < pindexPrev->nHeight){
-        strError = "Proposal " + strProposalName + ": Invalid nBlockEnd (" + std::to_string(nProposalEnd) + ") < current height (" + std::to_string(pindexPrev->nHeight) + ")";
+    if(nProposalEnd < nHeight){
+        strError = "Proposal " + strProposalName + ": Invalid nBlockEnd (" + std::to_string(nProposalEnd) + 
+                   ") < current height (" + std::to_string(nHeight) + ")";
         return false;
     }
 
@@ -1586,7 +1663,8 @@ bool CBudgetProposal::AddOrUpdateVote(CBudgetVote& vote, std::string& strError)
     }
 
     mapVotes[hash] = vote;
-    LogPrint("mnbudget", "CBudgetProposal::AddOrUpdateVote - %s %s\n", strAction.c_str(), vote.GetHash().ToString().c_str());
+    LogPrint("mnbudget", "CBudgetProposal::AddOrUpdateVote - %s - %s - %s\n", 
+              strAction.c_str(), vote.GetHash().ToString().c_str(), vote.GetVoteString().c_str());
 
     return true;
 }
@@ -1885,7 +1963,7 @@ void CFinalizedBudget::AutoCheck()
 
     if (strBudgetMode == "auto") //only vote for exact matches
     {
-        std::vector<CBudgetProposal*> vBudgetProposals = budget.GetBudget();
+        std::vector<CBudgetProposal*> vBudgetProposals = budget.GetBudget(false);
 
 
         for (unsigned int i = 0; i < vecBudgetPayments.size(); i++) {
