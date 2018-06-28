@@ -1225,7 +1225,7 @@ void CBudgetManager::ProcessMessage(CNode* pfrom, std::string& strCommand, CData
             masternodeSync.AddedBudgetItem(vote.GetHash());
         }
 
-        LogPrint("mnbudget","mvote - new budget vote for budget %s - %s - %s\n", 
+        LogPrint("mnbudget","mvote - new budget vote from %s for budget %s - %s - %s\n", pmn->addr.ToStringIP(),
                  vote.nProposalHash.ToString(),  vote.GetHash().ToString(), vote.GetVoteString().c_str());
     }
 

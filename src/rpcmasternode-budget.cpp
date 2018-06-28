@@ -698,8 +698,8 @@ UniValue getbudgetprojection(const UniValue& params, bool fHelp)
             "    \"IsValid\": true|false,        (boolean) Valid (true) or Invalid (false)\n"
             "    \"IsValidReason\": \"xxxx\",      (string) Error message, if any\n"
             "    \"fValid\": true|false,         (boolean) Valid (true) or Invalid (false)\n"
-            "    \"Alloted\": xxx.xxx,           (numeric) Amount alloted in current period\n"
-            "    \"TotalBudgetAlloted\": xxx.xxx (numeric) Total alloted\n"
+            "    \"Allotted\": xxx.xxx,           (numeric) Amount allotted in current period\n"
+            "    \"TotalBudgetAlloted\": xxx.xxx (numeric) Total allotted\n"
             "  }\n"
             "  ,...\n"
             "]\n"
@@ -721,7 +721,7 @@ UniValue getbudgetprojection(const UniValue& params, bool fHelp)
 
         UniValue bObj(UniValue::VOBJ);
         budgetToJSON(pbudgetProposal, bObj);
-        bObj.push_back(Pair("Alloted", ValueFromAmount(pbudgetProposal->GetAllotted())));
+        bObj.push_back(Pair("Allotted", ValueFromAmount(pbudgetProposal->GetAllotted())));
         bObj.push_back(Pair("TotalBudgetAlloted", ValueFromAmount(nTotalAllotted)));
 
         ret.push_back(bObj);
