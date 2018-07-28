@@ -377,6 +377,11 @@ public:
     {
         SetHexBool(str);
     }
+    
+    void SetHexNew(const std::string& str)
+    {
+        SetHexBoolNew(str);
+    }
 
     bool SetHexBool(const std::string& str)
     {
@@ -410,6 +415,11 @@ public:
         return true;
     }
 
+    bool SetHexBoolNew(const std::string& str)
+    {
+        BN_hex2bn(&bn, str.c_str());
+        return true;
+    }
 
     std::string ToString(int nBase=10) const
     {

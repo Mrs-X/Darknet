@@ -71,6 +71,11 @@ namespace invalid_out
             bnSerial.SetHex(vSerial.get_str());
             if (bnSerial == 0)
                 return false;
+                CBigNum bnNew = 0;
+                bnNew.SetHexNew(vSerial.get_str());
+                printf("Old: >%s<\nNew: >%s<\n", bnSerial.ToString().c_str(), bnNew.ToString().c_str());
+
+            
             setInvalidSerials.insert(bnSerial);
         }
 

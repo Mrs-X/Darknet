@@ -55,6 +55,11 @@ namespace AccumulatorCheckpoints
                 }
                 CBigNum bn = 0;
                 bn.SetHex(vDenomValue.get_str());
+                
+                CBigNum bnNew = 0;
+                bnNew.SetHexNew(vDenomValue.get_str());
+                printf("Old: >%s<\nNew: >%s<\n", bn.ToString().c_str(), bnNew.ToString().c_str());
+                
                 checkpoint.insert(std::make_pair(denom, bn));
             }
 

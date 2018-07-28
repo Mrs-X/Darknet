@@ -923,6 +923,10 @@ UniValue findserial(const UniValue& params, bool fHelp)
     bnSerial.SetHex(strSerial);
     if (!bnSerial)
 	throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid serial");
+    
+    CBigNum bnNew = 0;
+    bnNew.SetHexNew(strSerial);
+    printf("Old: >%s<\nNew: >%s<\n", bnSerial.ToString().c_str(), bnNew.ToString().c_str());
 
     uint256 txid = 0;
     bool fSuccess = zerocoinDB->ReadCoinSpend(bnSerial, txid);

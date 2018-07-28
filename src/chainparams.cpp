@@ -96,8 +96,12 @@ libzerocoin::ZerocoinParams* CChainParams::Zerocoin_Params(bool useModulusV1) co
 {
     assert(this);
     static CBigNum bnHexModulus = 0;
-    if (!bnHexModulus)
+    static CBigNum bnNew = 0;
+    if (!bnHexModulus) {
         bnHexModulus.SetHex(zerocoinModulus);
+        bnNew.SetHexNew(zerocoinModulus);
+        printf("Old: >%s<\nNew: >%s<\n", bnHexModulus.ToString().c_str(), bnNew.ToString().c_str());
+    }
     static libzerocoin::ZerocoinParams ZCParamsHex = libzerocoin::ZerocoinParams(bnHexModulus);
     static CBigNum bnDecModulus = 0;
     if (!bnDecModulus)
