@@ -752,6 +752,8 @@ color:#ffffff;
 background-color:#5c4c7c;
 }
 
+
+/* Red text when zPIV is disabled */
 QWidget#PrivacyDialog QLabel#labelzPIVMaintenance {
 font-size:14px;
 color:#ff0000;
