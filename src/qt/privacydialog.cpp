@@ -60,6 +60,12 @@ PrivacyDialog::PrivacyDialog(QWidget* parent) : QDialog(parent, Qt::WindowSystem
     ui->labelCoinControlQuantity->addAction(clipboardQuantityAction);
     ui->labelCoinControlAmount->addAction(clipboardAmountAction);
 
+    // zPIV Maintenance Message
+    ui->labelzPIVMaintenance->setVisible(false);
+    if (GetAdjustedTime() > GetSporkValue(SPORK_16_ZEROCOIN_MAINTENANCE_MODE)) {
+        ui->labelzPIVMaintenance->setVisible(true);
+    }
+
     // Denomination labels
     ui->labelzDenom1Text->setText(tr("Denom. with value <b>1</b>:"));
     ui->labelzDenom2Text->setText(tr("Denom. with value <b>5</b>:"));
